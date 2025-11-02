@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine repo root safely (works in Actions and locally)
+REPO="$(git rev-parse --show-toplevel 2>/dev/null || echo "${GITHUB_WORKSPACE:-$PWD}")"
+: "${REPO:=$PWD}"     # final guard for set -u
+
+# Configure author LOCALLY for this repo (no --global)
+git -C "$REPO" config --local user.email "actions@users.noreply.github.com"
+git -C "$REPO" config --local user.name  "SBX Handover Bot"
+
+# (Optional) silence any safe.directory warnings on GH-hosted runners
+git config --global --add safe.directory "$REPO" || true
+
 # Usage: scripts/append_handover.sh [--dry-run] [--branch <name>]
 # --dry-run : don't commit or push, just show what would happen
 # --branch  : target branch to push (default: main)
@@ -98,17 +109,16 @@ cat > "$STATUS_FILE" <<EOF
 }
 EOF
 
-git add "$HANDOVER_FILE" "$STATUS_FILE"
-
-COMMIT_MSG="SBX handover sync: $TIMESTAMP"
-if git commit -m "$COMMIT_MSG"; then
-  echo "[info] created single commit with handover + status.json"
+git -C "$REPO" add "handover/SBX_Handover.md" "handover/status.json"
+commit_msg="SBX handover sync — ${TIMESTAMP} UTC"
+if git -C "$REPO" commit -m "$commit_msg"; then
+  echo "[info] committed appended line"
 else
   echo "[info] no changes to commit (nothing appended?)"
 fi
 
 echo "[info] pushing to origin/$BRANCH"
-git push origin "$BRANCH"
+git -C "$REPO" push origin "$BRANCH"
 
 echo "[info] done. appended: $LINE"
 echo "[info] status: $STATUS_FILE (commit: <in-commit not recorded>)"
