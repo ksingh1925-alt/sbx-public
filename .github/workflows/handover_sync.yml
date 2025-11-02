@@ -57,18 +57,7 @@ jobs:
           done
           exit 0
 
-      - name: Create or update PR (when use_pr_mode=true)
-        if: ${{ github.event.inputs.use_pr_mode == 'true' }}
-        uses: peter-evans/create-pull-request@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: handover-sync
-          base: main
-          title: "SBX handover sync"
-          body: "Automated SBX handover sync."
-          commit-message: "SBX handover sync: automated PR"
-          draft: true
-          labels: automation/handovers
+
 
       - name: Upload status.json artifact (if present)
         if: always()
