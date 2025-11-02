@@ -71,9 +71,13 @@ jobs:
 
           printf '%s' "$TEXT" > /tmp/body.txt
 
-          echo "text<<EOF" >> "$GITHUB_OUTPUT"
-          cat /tmp/body.txt >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          # Use a unique delimiter so content can't accidentally close the heredoc
+          DELIM="GHX_$RANDOM_$(date +%s)"
+          {
+            echo "text<<$DELIM"
+            cat /tmp/body.txt
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
 
           echo "Preview:"
           cat /tmp/body.txt
