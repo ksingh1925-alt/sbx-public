@@ -12,6 +12,9 @@ jobs:
   sbx-handover-sync:
     name: "SBX Handover Sync"
     runs-on: ubuntu-latest
+    concurrency:
+      group: sbx-handover-sync
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,18 +27,17 @@ jobs:
           # run non-dry to append, commit and push
           bash scripts/append_handover.sh
 
-      - name: Commit and push if any remaining changes
+      - name: Commit and push with retries
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # if script already committed and pushed, this will be a no-op
-          if git diff --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          git add handover/
-          git commit --author "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" -m "Automated SBX handover update"
-          git push origin HEAD:main
+          for i in 1 2 3 4 5; do
+            git pull --rebase || true
+            git add handover/SBX_Handover.md handover/status.json || true
+            git commit -m "SBX handover sync: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" || true
+            git push && break || sleep $((2**(i-1)))
+          done
+          exit 0
 
       - name: Upload status.json artifact (if present)
         if: always()
