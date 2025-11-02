@@ -1,16 +1,16 @@
-name: Handover sync
+name: SBX Handover Sync
 
 on:
   workflow_dispatch: {}
-  # Example cron (disabled):
-  # schedule:
-  #   - cron: '0 * * * *' # every hour
+  schedule:
+    - cron: '0 * * * *' # hourly
 
 permissions:
   contents: write
 
 jobs:
-  append-and-push:
+  sbx-handover-sync:
+    name: "SBX Handover Sync"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -18,20 +18,28 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Append UTC timestamp to handover file
+      - name: Run append script
         run: |
-          HANDOVER_FILE="handover/SBX_Handover.md"
-          mkdir -p "$(dirname "$HANDOVER_FILE")"
-          echo "SBX handover sync — $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$HANDOVER_FILE"
+          chmod +x scripts/append_handover.sh
+          # run non-dry to append, commit and push
+          bash scripts/append_handover.sh
 
-      - name: Commit and push (if changed)
+      - name: Commit and push if any remaining changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # if script already committed and pushed, this will be a no-op
           if git diff --quiet; then
             echo "No changes to commit"
             exit 0
           fi
-          git add handover/SBX_Handover.md
+          git add handover/
           git commit --author "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" -m "Automated SBX handover update"
           git push origin HEAD:main
+
+      - name: Upload status.json artifact (if present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: handover-status
+          path: handover/status.json
