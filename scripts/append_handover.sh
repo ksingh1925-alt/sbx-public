@@ -79,11 +79,19 @@ if [[ -n "${GITHUB_RUN_ID-}" && -n "${GITHUB_REPOSITORY-}" ]]; then
   WORKFLOW_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 fi
 
+# Determine generated_by: github-actions when running in GH Actions, otherwise local
+if [[ "${GITHUB_ACTIONS-}" == "true" ]]; then
+  GENERATED_BY="github-actions"
+else
+  GENERATED_BY="local"
+fi
+
 cat > "$STATUS_FILE" <<EOF
 {
   "timestamp_utc": "$TIMESTAMP",
   "commit": "",
   "file": "$HANDOVER_FILE",
+  "generated_by": "${GENERATED_BY}",
   "run_id": "${GITHUB_RUN_ID-}",
   "runner_hostname": "$(hostname 2>/dev/null || true)",
   "workflow_url": "${WORKFLOW_URL}"
