@@ -44,43 +44,38 @@ jobs:
         run: |
           set -euo pipefail
 
-          TS="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-
-          # Last line from handover file
-          LAST="$(tail -n 1 handover/SBX_Handover.md 2>/dev/null || true)"
+          TS="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          LAST="$(tail -n 1 handover/SBX_HandoVER.md 2>/dev/null || true)"
           [ -z "$LAST" ] && LAST="(no last line found in handover/SBX_HandoVER.md)"
 
-          # Merge fields from root status.json
           EXTRA=""
           if [ -f status.json ]; then
-            RUN_URL=$(jq -r '.workflow_url // .run_url // empty' status.json)
-            HOST=$(jq -r '.runner_hostname // .host // empty' status.json)
-            [ -n "$RUN_URL" ] && EXTRA+="\nrun: ${RUN_URL}"
-            [ -n "$HOST" ] && EXTRA+="\nhost: ${HOST}"
+            RUN_URL=$(jq -r '.workflow_url // empty' status.json)
+            HOST=$(jq -r '.runner_hostname // empty' status.json)
+            [ -n "$RUN_URL" ] && EXTRA="${EXTRA}\nrun: ${RUN_URL}"
+            [ -n "$HOST" ] && EXTRA="${EXTRA}\nhost: ${HOST}"
           fi
 
-          # Optional short summary from handover/status.json (if present)
           HANDOVER_SUMMARY=""
           if [ -f handover/status.json ]; then
-            HANDOVER_SUMMARY=$(jq -r '.summary // .short // empty' handover/status.json)
+            HANDOVER_SUMMARY=$(jq -r '.summary // empty' handover/status.json)
           fi
 
           TEXT="SBX handover sync — ${TS}\n${LAST}"
           [ -n "$HANDOVER_SUMMARY" ] && TEXT="${TEXT}\nsummary: ${HANDOVER_SUMMARY}"
-          [ -n "$EXTRA" ] && TEXT="${TEXT}${EXTRA}"
+          [ -n "$EXTRA" ] && TEXT="${TEXT}\n${EXTRA}"
 
           printf '%s' "$TEXT" > /tmp/body.txt
+          echo "Preview:"
+          cat /tmp/body.txt
 
-          # Use a unique delimiter so content can't accidentally close the heredoc
+          # Write multi-line output to $GITHUB_OUTPUT using a unique delimiter
           DELIM="GHX_$RANDOM_$(date +%s)"
           {
             echo "text<<$DELIM"
             cat /tmp/body.txt
             echo "$DELIM"
-          } >> "${GITHUB_OUTPUT:-/tmp/github_output}"
-
-          echo "Preview:"
-          cat /tmp/body.txt
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify thread exists (GET)
         run: |
@@ -102,47 +97,49 @@ jobs:
 
       - name: Post message to OpenAI (Assistants v2)
         id: post
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
         run: |
           set -euo pipefail
-          # Build JSON safely with jq
-          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' > /tmp/payload.json
+
+          # Build JSON safely
+          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:{type:"text", text:$t}}' > /tmp/payload.json
 
           MAX_RETRIES=4
           for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $attempt: calling OpenAI"
+            echo "Attempt $attempt: calling OpenAI…"
             HTTP_CODE=$(
               curl -sS -o /tmp/resp.json -w '%{http_code}' \
-                https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}/messages \
+                https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
                 -H "OpenAI-Beta: assistants=v2" \
-                --data @/tmp/payload.json
-            ) || true
+                --data @/tmp/payload.json || true
+            )
 
-            echo "Received HTTP code: $HTTP_CODE"
             echo "Resp body:"; cat /tmp/resp.json || true
-            echo "HTTP code: ${HTTP_CODE}"
-            # Quick validation
+            echo "HTTP code: $HTTP_CODE"
+
             if [ "$HTTP_CODE" = "200" ]; then
-              MSG_ID=$(jq -r '.id // empty' /tmp/resp.json)
-              if [ -n "$MSG_ID" ] && [[ "$MSG_ID" == msg_* ]]; then
+              MSG_ID=$(jq -r '.id // empty' /tmp/resp.json || true)
+              if [ -n "$MSG_ID" ]; then
                 echo "✅ Posted message id: $MSG_ID"
-                echo "HTTP_CODE=$HTTP_CODE" >> "${GITHUB_OUTPUT:-/tmp/github_output}"
-                echo "MSG_ID=$MSG_ID" >> "${GITHUB_OUTPUT:-/tmp/github_output}"
+                {
+                  echo "HTTP_CODE=$HTTP_CODE"
+                  echo "MSG_ID=$MSG_ID"
+                } >> "$GITHUB_OUTPUT"
                 break
-              else
-                echo "Warning: response missing/invalid id; will retry if attempts remain"
               fi
-            else
-              echo "Warning: HTTP $HTTP_CODE; will retry if attempts remain"
             fi
 
             if [ "$attempt" -lt "$MAX_RETRIES" ]; then
               SLEEP=$((2 ** attempt))
-              echo "Sleeping $SLEEP seconds before retrying..."
-              sleep $SLEEP
+              echo "Retrying in $SLEEP s…"
+              sleep "$SLEEP"
             else
-              echo "❌ All $MAX_RETRIES attempts failed. Response body:" >&2
+              echo "❌ Failed after $MAX_RETRIES attempts. Response below:" >&2
               cat /tmp/resp.json >&2 || true
               exit 1
             fi
