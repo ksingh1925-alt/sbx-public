@@ -8,7 +8,7 @@ on:
         required: false
         default: "false"
   schedule:
-    - cron: "0 * * * *"  # hourly; remove if you only want manual runs
+    - cron: "0 * * * *"  # hourly; remove this block if you only want manual runs
 
 permissions:
   contents: read
@@ -25,9 +25,10 @@ jobs:
     steps:
       - name: Sanity checks
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
-          test -n "$OPENAI_THREAD_ID" || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
-          test -n "$OPENAI_ASSISTANT_ID" || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"       || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
+          test -n "$OPENAI_THREAD_ID"     || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
+          test -n "$OPENAI_ASSISTANT_ID"  || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
           echo "✅ Secrets present."
 
       - name: Checkout repo
@@ -36,7 +37,7 @@ jobs:
       - name: Set Git author
         run: |
           git config --local user.email "actions@github.com"
-          git config --local user.name "github-actions[bot]"
+          git config --local user.name  "github-actions[bot]"
 
       - name: Verify author (dry-run)
         run: |
@@ -50,7 +51,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          
           TS="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           LAST="$(tail -n 1 handover/SBX_HandoVER.md 2>/dev/null || true)"
           [ -z "$LAST" ] && LAST="(no last line found in handover/SBX_HandoVER.md)"
@@ -70,14 +70,15 @@ jobs:
 
           TEXT="SBX handover sync — ${TS}\n${LAST}"
           [ -n "$HANDOVER_SUMMARY" ] && TEXT="${TEXT}\nsummary: ${HANDOVER_SUMMARY}"
-          [ -n "$EXTRA" ] && TEXT="${TEXT}\n${EXTRA}"
+          [ -n "$EXTRA" ]            && TEXT="${TEXT}\n${EXTRA}"
 
           printf '%s' "$TEXT" > /tmp/body.txt
-          echo "Preview:"
+          echo "Preview payload text:"
           cat /tmp/body.txt
-          echo ""
+          echo
 
       - name: Verify thread exists
+        shell: bash
         run: |
           set -euo pipefail
           echo "GET https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}"
@@ -86,13 +87,14 @@ jobs:
             -H "OpenAI-Beta: assistants=v2" \
             "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}" \
             | tee /tmp/thread_check.txt
-          grep -q 'HTTP:200' /tmp/thread_check.txt || { echo "❌ Thread not found"; exit 1; }
+          grep -q '^HTTP:200$' /tmp/thread_check.txt || { echo "❌ Thread not found"; exit 1; }
 
       - name: Dry run check
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
-          echo "Dry run enabled. Would post:"
-          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}'
+          set -euo pipefail
+          echo "Dry run enabled. Would post this JSON to /messages:"
+          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' | tee /tmp/payload.json
           exit 0
 
       - name: Post message to OpenAI
@@ -100,8 +102,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Build payload with content as array (API requires array or string, not object)
           jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' > /tmp/payload.json
+          echo "POST /messages payload:"; cat /tmp/payload.json; echo
 
           MAX_RETRIES=4
           for attempt in $(seq 1 $MAX_RETRIES); do
@@ -114,14 +116,13 @@ jobs:
                 -H "OpenAI-Beta: assistants=v2" \
                 --data @/tmp/payload.json || true
             )
-            
             echo "HTTP: $HTTP_CODE"
             cat /tmp/resp.json || true
 
             if [ "$HTTP_CODE" = "200" ]; then
               MSG_ID=$(jq -r '.id // empty' /tmp/resp.json || true)
               if [ -n "$MSG_ID" ]; then
-                echo "✅ Posted message: $MSG_ID"
+                echo "✅ Posted message id: $MSG_ID"
                 echo "MSG_ID=$MSG_ID" >> "$GITHUB_OUTPUT"
                 break
               fi
@@ -137,11 +138,16 @@ jobs:
             fi
           done
 
-      - name: Create run
+      - name: Create run (trigger assistant)
         id: run
         shell: bash
         run: |
           set -euo pipefail
+          # Trim whitespace/newlines just in case
+          CLEAN_ID="$(printf '%s' "$OPENAI_ASSISTANT_ID" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          jq -nc --arg a "$CLEAN_ID" '{assistant_id: $a}' > /tmp/run_payload.json
+          echo "POST /runs payload:"; cat /tmp/run_payload.json; echo
+
           echo "Creating run..."
           HTTP_CODE=$(
             curl -sS -o /tmp/run.json -w '%{http_code}' \
@@ -149,9 +155,8 @@ jobs:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $OPENAI_API_KEY" \
               -H "OpenAI-Beta: assistants=v2" \
-              -d "{\"assistant_id\":\"$OPENAI_ASSISTANT_ID\"}"
+              --data @/tmp/run_payload.json
           )
-          
           echo "HTTP: $HTTP_CODE"
           cat /tmp/run.json || true
           [ "$HTTP_CODE" = "200" ] || { echo "❌ Failed to create run"; exit 1; }
@@ -203,8 +208,8 @@ jobs:
             -H "OpenAI-Beta: assistants=v2" \
             "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages?order=desc&limit=10" > /tmp/messages.json
 
-          echo "Messages:"
-          jq '.' /tmp/messages.json | head -120
+          echo "Messages snapshot:"
+          jq '.' /tmp/messages.json | sed -n '1,120p'
 
           REPLY=$(jq -r '.data[] | select(.role=="assistant") | .content[0].text.value // empty' /tmp/messages.json | head -n 1)
           [ -n "$REPLY" ] || REPLY="(no response)"
@@ -222,7 +227,7 @@ jobs:
         run: |
           echo "✅ Complete"
           echo "Message ID: ${{ steps.post.outputs.MSG_ID }}"
-          echo "Run ID: ${{ steps.run.outputs.RUN_ID }}"
-          echo ""
+          echo "Run ID:     ${{ steps.run.outputs.RUN_ID }}"
+          echo
           echo "Response:"
           echo "${{ steps.response.outputs.RESPONSE }}"
