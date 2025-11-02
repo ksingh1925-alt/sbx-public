@@ -57,5 +57,6 @@ Notes about modes
 Reliability
 
 - Workflow concurrency: the GitHub Action uses a `concurrency` group (`sbx-handover-sync`) so multiple workflow runs won't race.
+ - Workflow concurrency: the GitHub Action uses a `concurrency` group (`sbx-handover`) so multiple workflow runs won't race.
 - Push retries: the Action uses an exponential backoff retry loop when pushing (up to 5 attempts).
 - Script lock: the script uses `flock` on `/tmp/sbx_handover.lock` to avoid local concurrent runs.
