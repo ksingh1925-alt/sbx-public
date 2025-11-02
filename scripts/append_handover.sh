@@ -57,18 +57,6 @@ fi
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 LINE="SBX handover sync — $TIMESTAMP"
-
-echo "[info] appending line: $LINE"
-if [[ $DRY_RUN -eq 1 ]]; then
-  echo "[dry-run] would append to $HANDOVER_FILE: $LINE"
-  echo "[dry-run] would create/overwrite $STATUS_FILE with timestamp and commit info"
-  echo "{\"timestamp_utc\": \"$TIMESTAMP\", \"commit\": \"<would-commit>\", \"file\": \"$HANDOVER_FILE\"}"
-  echo "[dry-run] would git add/commit and push to branch: $BRANCH"
-  exit 0
-fi
-
-echo "$LINE" >> "$HANDOVER_FILE"
-
 # Ensure we are on the desired branch (create if necessary)
 if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
   git checkout "$BRANCH"
@@ -76,31 +64,39 @@ else
   git checkout -b "$BRANCH"
 fi
 
-echo "[info] staging $HANDOVER_FILE"
-git add "$HANDOVER_FILE"
+echo "[info] preparing single commit containing $HANDOVER_FILE and $STATUS_FILE"
+
+# Build status.json now. NOTE: embedding the new commit's SHA INSIDE that same commit
+# is not possible with standard git plumbing (it's a circular dependency). To keep
+# a single commit that contains both files, we write the status.json with the
+# other trace fields but leave the commit field empty. If you need the final
+# commit SHA recorded, the script could create a second commit after (currently
+# avoided to keep a single commit).
+cat > "$STATUS_FILE" <<EOF
+{
+  "timestamp_utc": "$TIMESTAMP",
+  "commit": "",
+  "file": "$HANDOVER_FILE",
+  "run_id": "${GITHUB_RUN_ID-}",
+  "runner_hostname": "$(hostname 2>/dev/null || true)",
+  "workflow_url": ""
+}
+EOF
+
+git add "$HANDOVER_FILE" "$STATUS_FILE"
 
 COMMIT_MSG="SBX handover sync: $TIMESTAMP"
 if git commit -m "$COMMIT_MSG"; then
-  echo "[info] committed appended line"
+  echo "[info] created single commit with handover + status.json"
 else
   echo "[info] no changes to commit (nothing appended?)"
 fi
 
-# Compute short hash of the new commit (this is the final commit that added the line)
-COMMIT_SHORT=$(git rev-parse --short HEAD || echo "")
+echo "[info] pushing to origin/$BRANCH"
+git push origin "$BRANCH"
 
-# Additional traceability fields (available in GitHub Actions environment)
-RUN_ID=${GITHUB_RUN_ID-}
-RUNNER_HOSTNAME="$(hostname 2>/dev/null || true)"
-REPO=${GITHUB_REPOSITORY-}
-if [[ -z "$REPO" ]]; then
-  # try to infer from origin remote
-  REPO=$(git config --get remote.origin.url || true)
-  # convert git URL to owner/repo if possible
-  REPO=$(echo "$REPO" | sed -n 's#.*/\([^/]*\/[^/]*\)\(.git\)*$#\1#p')
-fi
-WORKFLOW_URL=""
-if [[ -n "${RUN_ID-}" && -n "$REPO" ]]; then
+echo "[info] done. appended: $LINE"
+echo "[info] status: $STATUS_FILE (commit: <in-commit not recorded>)"
   WORKFLOW_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
 fi
 
