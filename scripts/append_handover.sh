@@ -1,15 +1,117 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Append a UTC timestamp line to handover/SBX_Handover.md, commit, and push.
-HANDOVER_FILE="handover/SBX_Handover.md"
+# Usage: scripts/append_handover.sh [--dry-run] [--branch <name>]
+# --dry-run : don't commit or push, just show what would happen
+# --branch  : target branch to push (default: main)
 
-if [ ! -d "$(dirname "$HANDOVER_FILE")" ]; then
-  mkdir -p "$(dirname "$HANDOVER_FILE")"
+HANDOVER_FILE="handover/SBX_Handover.md"
+STATUS_FILE="handover/status.json"
+LOCK_FILE="/tmp/sbx_handover.lock"
+
+DRY_RUN=0
+BRANCH="main"
+
+print_usage() {
+  echo "Usage: $0 [--dry-run] [--branch <name>]"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --branch)
+      if [[ -z "${2-}" ]]; then
+        echo "--branch requires an argument" >&2
+        print_usage
+        exit 2
+      fi
+      BRANCH="$2"
+      shift 2
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      print_usage
+      exit 2
+      ;;
+  esac
+done
+
+echo "[info] target branch: $BRANCH"
+echo "[info] dry-run: $DRY_RUN"
+
+mkdir -p "$(dirname "$HANDOVER_FILE")"
+
+# Acquire flock to prevent concurrent runs
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+  echo "[error] another append operation is in progress (lock: $LOCK_FILE)" >&2
+  exit 1
 fi
 
-echo "SBX handover sync — $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$HANDOVER_FILE"
+TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+LINE="SBX handover sync — $TIMESTAMP"
 
+echo "[info] appending line: $LINE"
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo "[dry-run] would append to $HANDOVER_FILE: $LINE"
+  echo "[dry-run] would create/overwrite $STATUS_FILE with timestamp and commit info"
+  echo "{\"timestamp_utc\": \"$TIMESTAMP\", \"commit\": \"<would-commit>\", \"file\": \"$HANDOVER_FILE\"}"
+  echo "[dry-run] would git add/commit and push to branch: $BRANCH"
+  exit 0
+fi
+
+echo "$LINE" >> "$HANDOVER_FILE"
+
+# Ensure we are on the desired branch (create if necessary)
+if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+  git checkout "$BRANCH"
+else
+  git checkout -b "$BRANCH"
+fi
+
+echo "[info] staging $HANDOVER_FILE"
 git add "$HANDOVER_FILE"
-git commit -m "Appended SBX handover update" || echo "No changes to commit"
-git push origin main
+
+if git commit -m "Appended SBX handover update"; then
+  echo "[info] committed appended line"
+else
+  echo "[info] no changes to commit (nothing appended?)"
+fi
+
+COMMIT_SHORT=$(git rev-parse --short HEAD || echo "")
+
+echo "[info] writing status file $STATUS_FILE"
+cat > "$STATUS_FILE" <<EOF
+{
+  "timestamp_utc": "$TIMESTAMP",
+  "commit": "${COMMIT_SHORT}",
+  "file": "$HANDOVER_FILE"
+}
+EOF
+
+git add "$STATUS_FILE"
+if git commit -m "Update handover status"; then
+  echo "[info] committed status.json"
+else
+  echo "[info] no changes to commit for status.json"
+fi
+
+if [[ "$BRANCH" == "main" ]]; then
+  TARGET="main"
+else
+  TARGET="$BRANCH"
+fi
+
+echo "[info] pushing to origin/$TARGET"
+git push origin "$TARGET"
+
+echo "[info] done. appended: $LINE"
+echo "[info] status: $STATUS_FILE (commit: $COMMIT_SHORT)"
+
