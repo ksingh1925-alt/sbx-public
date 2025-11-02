@@ -1,0 +1,29 @@
+name: SBX Handover Smoke Test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  smoke:
+    name: Run append_handover.sh --dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set git author
+        run: |
+          git config --local user.name "${GITHUB_ACTOR}"
+          git config --local user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Make append script executable
+        run: chmod +x scripts/append_handover.sh
+
+      - name: Dry-run append script
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Running: bash scripts/append_handover.sh --dry-run"
+          bash scripts/append_handover.sh --dry-run || true
+          echo "---- end dry-run ----"
