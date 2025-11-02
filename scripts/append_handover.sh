@@ -124,3 +124,135 @@ echo "[info] done. appended: $LINE"
 COMMIT_SHORT=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)
 echo "[info] status: $STATUS_FILE (commit: ${COMMIT_SHORT:-})"
 
+- name: Upload status.json artifact
+  uses: actions/upload-artifact@v4
+  with:
+    name: handover-status
+    path: |
+      handover/status.json
+      handover/SBX_Handover.md
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo "[info] dry-run mode enabled; skipping actual push"
+finame: Post to OpenAI Thread
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Artifact to fetch (default: handover-status)
+        default: handover-status
+      dry_run:
+        description: Print payload only (no POST)
+        default: "true"
+      retry_max:
+        description: Max retries for POST
+        default: "5"
+      backoff_base:
+        description: Base seconds for exponential backoff
+        default: "2"
+      api_key_secret:
+        description: Secret name for API key
+        default: OPENAI_API_KEY
+      thread_id_secret:
+        description: Secret name for thread id
+        default: OPENAI_THREAD_ID
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download handover artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: handover
+
+      - name: Build message text
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS=$(jq -r '.timestamp_utc // empty' handover/status.json)
+          RUN_URL=$(jq -r '.workflow_url // empty' handover/status.json)
+          HOST=$(jq -r '.runner_hostname // empty' handover/status.json)
+          LAST_LINE=$(tail -n 1 handover/SBX_Handover.md || true)
+
+          {
+            echo "SBX handover sync — ${TS}"
+            [ -n "$LAST_LINE" ] && echo "$LAST_LINE"
+            [ -n "$RUN_URL" ] && echo "run: ${RUN_URL}"
+            [ -n "$HOST" ] && echo "host: ${HOST}"
+          } > message.txt
+
+          echo "payload_path=message.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Dry run (print payload only)
+        if: ${{ inputs.dry_run == 'true' }}
+        shell: bash
+        run: |
+          echo "---- DRY RUN PAYLOAD ----"
+          cat message.txt
+          echo "-------------------------"
+
+      - name: Post message to OpenAI thread (with retries)
+        if: ${{ inputs.dry_run != 'true' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets[inputs.api_key_secret] }}
+          THREAD_ID: ${{ secrets[inputs.thread_id_secret] }}
+          RETRY_MAX: ${{ inputs.retry_max }}
+          BACKOFF_BASE: ${{ inputs.backoff_base }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${OPENAI_API_KEY:-}" ] || [ -z "${THREAD_ID:-}" ]; then
+            echo "Missing OPENAI_API_KEY or THREAD_ID secret"; exit 1
+          fi
+
+          # Escape payload for JSON
+          ESCAPED=$(python3 - <<'PY'
+import json, sys
+print(json.dumps(open("message.txt","r",encoding="utf-8").read()))
+PY
+)
+
+          try_post() {
+            # assistants v2 requires the beta header, we post a message to the thread
+            curl -sS -w '\nHTTP:%{http_code}\n' \
+              -X POST "https://api.openai.com/v1/threads/${THREAD_ID}/messages" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+              -H "OpenAI-Beta: assistants=v2" \
+              -d "{\"role\":\"user\",\"content\":${ESCAPED}}" 
+          }
+
+          max="${RETRY_MAX:-5}"
+          base="${BACKOFF_BASE:-2}"
+
+          i=1
+          while [ "$i" -le "$max" ]; do
+            RESP=$(try_post)
+            CODE=$(printf "%s" "$RESP" | tail -n1 | sed 's/^HTTP://')
+            BODY=$(printf "%s" "$RESP" | sed '$d')
+
+            echo "Attempt $i/$max → HTTP ${CODE}"
+            if echo "$CODE" | grep -qE '^(200|201|202|204)$'; then
+              echo "Success"; echo "$BODY"; exit 0
+            fi
+
+            if [ "$i" -lt "$max" ]; then
+              # cap backoff to something reasonable
+              SLEEP=$(( base ** i ))
+              [ "$SLEEP" -gt 30 ] && SLEEP=30
+              echo "Retrying in ${SLEEP}s…"
+              sleep "$SLEEP"
+            fi
+            i=$((i+1))
+          done
+
+          echo "Failed after ${max} attempts"
+          exit 1
+
