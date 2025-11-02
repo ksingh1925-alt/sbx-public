@@ -89,12 +89,30 @@ fi
 # Compute short hash of the new commit (this is the final commit that added the line)
 COMMIT_SHORT=$(git rev-parse --short HEAD || echo "")
 
-echo "[info] writing status file $STATUS_FILE with commit $COMMIT_SHORT"
+# Additional traceability fields (available in GitHub Actions environment)
+RUN_ID=${GITHUB_RUN_ID-}
+RUNNER_HOSTNAME="$(hostname 2>/dev/null || true)"
+REPO=${GITHUB_REPOSITORY-}
+if [[ -z "$REPO" ]]; then
+  # try to infer from origin remote
+  REPO=$(git config --get remote.origin.url || true)
+  # convert git URL to owner/repo if possible
+  REPO=$(echo "$REPO" | sed -n 's#.*/\([^/]*\/[^/]*\)\(.git\)*$#\1#p')
+fi
+WORKFLOW_URL=""
+if [[ -n "${RUN_ID-}" && -n "$REPO" ]]; then
+  WORKFLOW_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
+fi
+
+echo "[info] writing status file $STATUS_FILE with commit $COMMIT_SHORT and run_id ${RUN_ID:-}" 
 cat > "$STATUS_FILE" <<EOF
 {
   "timestamp_utc": "$TIMESTAMP",
   "commit": "${COMMIT_SHORT}",
-  "file": "$HANDOVER_FILE"
+  "file": "$HANDOVER_FILE",
+  "run_id": "${RUN_ID:-}",
+  "runner_hostname": "${RUNNER_HOSTNAME:-}",
+  "workflow_url": "${WORKFLOW_URL:-}"
 }
 EOF
 
