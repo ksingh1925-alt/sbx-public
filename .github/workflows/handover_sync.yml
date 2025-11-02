@@ -1,7 +1,12 @@
 name: SBX Handover Sync
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      use_pr_mode:
+        description: 'If true, push to branch `handover-sync` and open/update a PR to main'
+        required: false
+        default: 'false'
   schedule:
     - cron: '0 * * * *' # hourly
 
@@ -28,16 +33,39 @@ jobs:
           bash scripts/append_handover.sh
 
       - name: Commit and push with retries
+        env:
+          USE_PR_MODE: ${{ github.event.inputs.use_pr_mode }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "${USE_PR_MODE:-}" ]; then
+            USE_PR_MODE=false
+          fi
+          if [ "${USE_PR_MODE}" = "true" ]; then
+            TARGET=handover-sync
+          else
+            TARGET=main
+          fi
+          echo "[info] use_pr_mode=$USE_PR_MODE -> pushing to $TARGET"
           for i in 1 2 3 4 5; do
             git pull --rebase || true
             git add handover/SBX_Handover.md handover/status.json || true
             git commit -m "SBX handover sync: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" || true
-            git push && break || sleep $((2**(i-1)))
+            git push origin "$TARGET" && break || sleep $((2**(i-1)))
           done
           exit 0
+
+      - name: Create or update PR (when use_pr_mode=true)
+        if: ${{ github.event.inputs.use_pr_mode == 'true' }}
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: handover-sync
+          base: main
+          title: "SBX handover sync"
+          body: "Automated SBX handover sync."
+          commit-message: "SBX handover sync: automated PR"
 
       - name: Upload status.json artifact (if present)
         if: always()
