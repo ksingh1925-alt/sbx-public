@@ -1,5 +1,7 @@
 # SBX public handover mirror
 
+[![SBX Handover Sync](https://github.com/ksingh1925-alt/sbx-public/actions/workflows/handover_sync.yml/badge.svg?branch=main)](https://github.com/ksingh1925-alt/sbx-public/actions/workflows/handover_sync.yml)
+
 Public handover mirror; timestamped sync line in `handover/SBX_Handover.md`.
 
 Quick-start
@@ -24,10 +26,16 @@ Notes
 - The workflow `.github/workflows/handover_sync.yml` (optional) can be run manually via GitHub's Actions UI to perform the same operation in CI.
 - The script will append one UTC line per run; use the included flock-based locking to avoid concurrency issues.
 
-Public raw endpoints
+Public Endpoints
 
-- https://raw.githubusercontent.com/ksingh1925-alt/sbx-public/main/handover/SBX_Handover.md
-- https://raw.githubusercontent.com/ksingh1925-alt/sbx-public/main/handover/status.json
+- SBX handover markdown (raw): https://raw.githubusercontent.com/ksingh1925-alt/sbx-public/main/handover/SBX_Handover.md
+- status.json (raw): https://raw.githubusercontent.com/ksingh1925-alt/sbx-public/main/handover/status.json
+
+How to trigger
+
+- VS Code Task: Run the build task (Cmd/Ctrl+Shift+B) and select "Append SBX handover timestamp" or the dry-run / PR-mode tasks.
+- Makefile: run `make handover-sync` (or `make handover-dry`, `make handover-pr`).
+- GitHub Actions: Actions tab -> "SBX Handover Sync" -> Run workflow. Use the `use_pr_mode` input to push to a PR branch instead of main.
 
 How to run
 
