@@ -121,32 +121,6 @@ echo "[info] pushing to origin/$BRANCH"
 git -C "$REPO" push origin "$BRANCH"
 
 echo "[info] done. appended: $LINE"
-echo "[info] status: $STATUS_FILE (commit: <in-commit not recorded>)"
-  WORKFLOW_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
-fi
-
-echo "[info] writing status file $STATUS_FILE with commit $COMMIT_SHORT and run_id ${RUN_ID:-}" 
-cat > "$STATUS_FILE" <<EOF
-{
-  "timestamp_utc": "$TIMESTAMP",
-  "commit": "${COMMIT_SHORT}",
-  "file": "$HANDOVER_FILE",
-  "run_id": "${RUN_ID:-}",
-  "runner_hostname": "${RUNNER_HOSTNAME:-}",
-  "workflow_url": "${WORKFLOW_URL:-}"
-}
-EOF
-
-git add "$STATUS_FILE"
-if git commit -m "Update handover status: $TIMESTAMP"; then
-  echo "[info] committed status.json"
-else
-  echo "[info] no changes to commit for status.json"
-fi
-
-echo "[info] pushing to origin/$BRANCH"
-git push origin "$BRANCH"
-
-echo "[info] done. appended: $LINE"
-echo "[info] status: $STATUS_FILE (commit: $COMMIT_SHORT)"
+COMMIT_SHORT=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)
+echo "[info] status: $STATUS_FILE (commit: ${COMMIT_SHORT:-})"
 
