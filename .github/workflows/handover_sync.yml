@@ -66,6 +66,8 @@ jobs:
           title: "SBX handover sync"
           body: "Automated SBX handover sync."
           commit-message: "SBX handover sync: automated PR"
+          draft: true
+          labels: automation/handovers
 
       - name: Upload status.json artifact (if present)
         if: always()
