@@ -11,5 +11,20 @@
         "isDefault": true
       }
     }
+    ,
+    {
+      "label": "Append SBX (dry-run)",
+      "type": "shell",
+      "command": "bash scripts/append_handover.sh --dry-run",
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "Append SBX (PR mode)",
+      "type": "shell",
+      "command": "bash scripts/append_handover.sh --branch handover-sync",
+      "problemMatcher": [],
+      "group": "none"
+    }
   ]
 }
