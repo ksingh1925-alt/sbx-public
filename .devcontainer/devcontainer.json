@@ -1,0 +1,39 @@
+{
+  "name": "SBX Public Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  "workspaceFolder": "/workspaces/sbx-public",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.copilot-chat"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.shell.linux": "/bin/bash"
+      }
+    }
+  },
+  "postCreateCommand": "(command -v apt-get >/dev/null 2>&1 && (sudo apt-get update && sudo apt-get install -y git make bash)) || true && make check",
+  "remoteUser": "vscode"
+}
+{
+  "name": "SBX Handover Devcontainer",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {},
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.copilot-chat"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash"
+          }
+        }
+      }
+    }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y git make bash && make check"
+}
