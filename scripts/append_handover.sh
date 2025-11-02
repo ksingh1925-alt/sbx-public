@@ -76,30 +76,20 @@ else
   git checkout -b "$BRANCH"
 fi
 
-echo "[info] preparing single commit containing $HANDOVER_FILE and $STATUS_FILE"
-
-# Create a status file with a placeholder commit (we'll amend to include final data)
-cat > "$STATUS_FILE" <<EOF
-{
-  "timestamp_utc": "$TIMESTAMP",
-  "commit": "<placeholder>",
-  "file": "$HANDOVER_FILE"
-}
-EOF
-
-git add "$HANDOVER_FILE" "$STATUS_FILE"
+echo "[info] staging $HANDOVER_FILE"
+git add "$HANDOVER_FILE"
 
 COMMIT_MSG="SBX handover sync: $TIMESTAMP"
 if git commit -m "$COMMIT_MSG"; then
-  echo "[info] created commit for handover + status (will amend status.commit to final short-hash)"
+  echo "[info] committed appended line"
 else
   echo "[info] no changes to commit (nothing appended?)"
 fi
 
-# Compute short hash of the new commit
+# Compute short hash of the new commit (this is the final commit that added the line)
 COMMIT_SHORT=$(git rev-parse --short HEAD || echo "")
 
-# Update status.json with the commit short hash and amend the commit so both files are in a single commit
+echo "[info] writing status file $STATUS_FILE with commit $COMMIT_SHORT"
 cat > "$STATUS_FILE" <<EOF
 {
   "timestamp_utc": "$TIMESTAMP",
@@ -109,10 +99,10 @@ cat > "$STATUS_FILE" <<EOF
 EOF
 
 git add "$STATUS_FILE"
-if git commit --amend --no-edit >/dev/null 2>&1; then
-  echo "[info] amended commit to include final status.json"
+if git commit -m "Update handover status: $TIMESTAMP"; then
+  echo "[info] committed status.json"
 else
-  echo "[warn] amend failed; status.json may not be in the same commit"
+  echo "[info] no changes to commit for status.json"
 fi
 
 echo "[info] pushing to origin/$BRANCH"
