@@ -18,6 +18,10 @@ on:
       assistant_secret:
         description: Optional secret name for assistant id
         default: OPENAI_ASSISTANT_ID
+      dry_run:
+        description: "If true (when dispatching), only print payload"
+        required: false
+        default: "false"
 
 jobs:
   post-to-thread:
@@ -112,6 +116,33 @@ jobs:
             sleep $((2**i))
             [ "$i" -eq 3 ] && { echo "$BODYJSON" | jq . || true; exit 1; }
           done
+
+  dryrun:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name || 'handover-status' }}
+          path: handover
+      - name: Build message text (dry-run)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS=$(jq -r '.timestamp_utc // empty' handover/status.json)
+          RUN_URL=$(jq -r '.workflow_url // empty' handover/status.json)
+          HOST=$(jq -r '.runner_hostname // empty' handover/status.json)
+          LAST_LINE=$(tail -n 1 handover/SBX_Handover.md || true)
+          {
+            echo "SBX handover sync — ${TS}"
+            [ -n "$LAST_LINE" ] && echo "$LAST_LINE"
+            [ -n "$RUN_URL" ] && echo "run: ${RUN_URL}"
+            [ -n "$HOST" ] && echo "host: ${HOST}"
+          } > message.txt
+          echo "---- DRY RUN PAYLOAD ----"
+          cat message.txt
+          echo "-------------------------"
 name: Post to OpenAI Thread (on handover completion)
 
 on:

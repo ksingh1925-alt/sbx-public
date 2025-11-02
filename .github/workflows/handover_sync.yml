@@ -64,7 +64,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: handover-status
-          path: handover/status.json
+          path: |
+            handover/status.json
+            handover/SBX_Handover.md
 
       - name: Update README last updated (when pushing to main)
         if: ${{ github.event.inputs.use_pr_mode != 'true' }}
