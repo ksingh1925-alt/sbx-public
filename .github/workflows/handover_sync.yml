@@ -19,7 +19,7 @@ jobs:
     name: "SBX Handover Sync"
     runs-on: ubuntu-latest
     concurrency:
-      group: sbx-handover-sync
+      group: sbx-handover
       cancel-in-progress: false
     steps:
       - name: Checkout
