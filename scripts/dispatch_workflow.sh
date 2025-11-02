@@ -1,4 +1,6 @@
-#!/usr/bin/env bash
+# Replace <thread-id> with the value the script printed, or pipe it in.
+echo "THE_THREAD_ID" | gh secret set OPENAI_THREAD_ID# Replace <thread-id> with the value the script printed, or pipe it in.
+echo "THE_THREAD_ID" | gh secret set OPENAI_THREAD_ID#!/usr/bin/env bash
 set -euo pipefail
 
 # Dispatch the SBX Handover Sync workflow via GitHub CLI

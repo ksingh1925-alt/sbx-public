@@ -62,3 +62,24 @@ Reliability
  - Workflow concurrency: the GitHub Action uses a `concurrency` group (`sbx-handover`) so multiple workflow runs won't race.
 - Push retries: the Action uses an exponential backoff retry loop when pushing (up to 5 attempts).
 - Script lock: the script uses `flock` on `/tmp/sbx_handover.lock` to avoid local concurrent runs.
+
+Run the OpenAI post workflow
+
+- The repository contains an Actions workflow `Post to OpenAI Thread` that posts a short handover message to an OpenAI thread using two repository secrets:
+	- `OPENAI_API_KEY` — your OpenAI API key
+	- `OPENAI_THREAD_ID` — the thread id to post messages into
+
+- The workflow supports a `dry_run` input which, when set to `true`, will print the JSON payload and skip the API call. To run manually via the Actions UI, choose the workflow and set the input.
+
+- The workflow will read `handover/SBX_Handover.md` (last line) and — if present — append a brief summary from `handover/status.json` (timestamp, generated_by, run_id). This makes the posted message include recent context.
+
+- To create and set `OPENAI_THREAD_ID` locally, use the included helper script (requires `gh` and your OpenAI key):
+
+```bash
+# create a thread and set the repo secret (runs locally, requires gh)
+scripts/create_openai_thread_and_set_secret.sh
+```
+
+- To run the workflow manually: Actions -> Post to OpenAI Thread -> Run workflow. For a dry run check `dry_run=true`.
+
+- If you'd like the payload to include more fields from `status.json`, tell me which ones and I will add them.
