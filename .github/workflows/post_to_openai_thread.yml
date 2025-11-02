@@ -77,7 +77,7 @@ jobs:
             echo "text<<$DELIM"
             cat /tmp/body.txt
             echo "$DELIM"
-          } >> "$GITHUB_OUTPUT"
+          } >> "${GITHUB_OUTPUT:-/tmp/github_output}"
 
           echo "Preview:"
           cat /tmp/body.txt
@@ -127,8 +127,8 @@ jobs:
               MSG_ID=$(jq -r '.id // empty' /tmp/resp.json)
               if [ -n "$MSG_ID" ] && [[ "$MSG_ID" == msg_* ]]; then
                 echo "✅ Posted message id: $MSG_ID"
-                echo "HTTP_CODE=$HTTP_CODE" >> $GITHUB_OUTPUT
-                echo "MSG_ID=$MSG_ID" >> $GITHUB_OUTPUT
+                echo "HTTP_CODE=$HTTP_CODE" >> "${GITHUB_OUTPUT:-/tmp/github_output}"
+                echo "MSG_ID=$MSG_ID" >> "${GITHUB_OUTPUT:-/tmp/github_output}"
                 break
               else
                 echo "Warning: response missing/invalid id; will retry if attempts remain"

@@ -74,7 +74,7 @@ jobs:
             echo "TEXT<<EOF"
             cat message.txt
             echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          } >> "${GITHUB_OUTPUT:-/tmp/github_output}"
 
       - name: Post message to OpenAI thread (with retries)
         env:
@@ -440,7 +440,7 @@ jobs:
                   [ -n "$HOST" ] && echo "host: ${HOST}"
                 } > message.txt
 
-                echo "payload_path=message.txt" >> "$GITHUB_OUTPUT"
+                echo "payload_path=message.txt" >> "${GITHUB_OUTPUT:-/tmp/github_output}"
 
             - name: Dry run (print payload only)
               if: ${{ inputs.dry_run == 'true' }}
