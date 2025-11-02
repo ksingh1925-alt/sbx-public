@@ -1,0 +1,37 @@
+name: Handover sync
+
+on:
+  workflow_dispatch: {}
+  # Example cron (disabled):
+  # schedule:
+  #   - cron: '0 * * * *' # every hour
+
+permissions:
+  contents: write
+
+jobs:
+  append-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Append UTC timestamp to handover file
+        run: |
+          HANDOVER_FILE="handover/SBX_Handover.md"
+          mkdir -p "$(dirname "$HANDOVER_FILE")"
+          echo "SBX handover sync — $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$HANDOVER_FILE"
+
+      - name: Commit and push (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git add handover/SBX_Handover.md
+          git commit --author "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" -m "Automated SBX handover update"
+          git push origin HEAD:main
