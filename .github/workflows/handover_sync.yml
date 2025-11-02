@@ -27,9 +27,18 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Run append script
+      - name: Set git author
+        run: |
+          git config --local user.name "${GITHUB_ACTOR}"
+          git config --local user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Make append script executable
         run: |
           chmod +x scripts/append_handover.sh
+
+      - name: Run append script (no dry-run)
+        run: |
           # run non-dry to append, commit and push
           bash scripts/append_handover.sh
 
