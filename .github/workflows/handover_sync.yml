@@ -76,3 +76,31 @@ jobs:
         with:
           name: handover-status
           path: handover/status.json
+
+      - name: Update README last updated (when pushing to main)
+        if: ${{ github.event.inputs.use_pr_mode != 'true' }}
+        run: |
+          set -euo pipefail
+          if [ ! -f handover/status.json ]; then
+            echo "no status.json to read"
+            exit 0
+          fi
+          TS=$(python3 -c "import json,sys;print(json.load(open('handover/status.json')).get('timestamp_utc',''))")
+          C=$(python3 -c "import json,sys;print(json.load(open('handover/status.json')).get('commit',''))")
+          UPDATE="Last updated: ${TS} (commit ${C})"
+          echo "[info] Updating README with: $UPDATE"
+          if grep -q "<!-- SBX_LAST_UPDATED -->" README.md; then
+            sed -i "s/<!-- SBX_LAST_UPDATED -->/${UPDATE}/" README.md
+          else
+            # insert after badge line
+            awk 'NR==1{print;next}1' README.md > README.tmp && mv README.tmp README.md || true
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          for i in 1 2 3 4 5; do
+            git pull --rebase || true
+            git commit -m "chore: update README last updated: ${TS}" || true
+            git push && break || sleep $((2**(i-1)))
+          done
+          echo "[info] README updated"
