@@ -43,3 +43,9 @@ Notes about modes
 - Dry-run: `--dry-run` prints actions without committing or pushing. Useful for testing.
 - PR mode: `--branch <name>` creates/checks out the branch and pushes there (e.g. `--branch handover-sync`). Useful if you want a branch/PR workflow instead of pushing to `main`.
 - Locking: the script uses `/tmp/sbx_handover.lock` via `flock` to prevent concurrent runs.
+
+Reliability
+
+- Workflow concurrency: the GitHub Action uses a `concurrency` group (`sbx-handover-sync`) so multiple workflow runs won't race.
+- Push retries: the Action uses an exponential backoff retry loop when pushing (up to 5 attempts).
+- Script lock: the script uses `flock` on `/tmp/sbx_handover.lock` to avoid local concurrent runs.
