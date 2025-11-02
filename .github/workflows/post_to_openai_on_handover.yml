@@ -1,0 +1,80 @@
+name: Post to OpenAI Thread (on handover completion)
+
+on:
+  workflow_run:
+    workflows: ["SBX Handover Sync"]
+    types: [completed]
+
+jobs:
+  post-to-thread:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (needed for path structure)
+        uses: actions/checkout@v4
+
+      - name: Download handover-status artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: handover-status
+          path: handover
+
+      - name: Build message text
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS=$(jq -r '.timestamp_utc // empty' handover/status.json)
+          RUN_URL=$(jq -r '.workflow_url // empty' handover/status.json)
+          HOST=$(jq -r '.runner_hostname // empty' handover/status.json)
+          LAST_LINE=""
+          if [ -f handover/SBX_Handover.md ]; then
+            LAST_LINE=$(tail -n 1 handover/SBX_Handover.md || true)
+          fi
+
+          {
+            echo "SBX handover sync — ${TS}"
+            [ -n "$LAST_LINE" ] && echo "$LAST_LINE"
+            [ -n "$RUN_URL" ]  && echo "run: ${RUN_URL}"
+            [ -n "$HOST" ]     && echo "host: ${HOST}"
+          } > message.txt
+
+          # Expose as output (multiline safe)
+          {
+            echo "TEXT<<EOF"
+            cat message.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post message to OpenAI thread (Assistants v2)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY=$(jq -n --arg text "${{ steps.build.outputs.TEXT }}" \
+            '{role:"user", content:[{type:"text", text:$text}] }')
+
+          curl -sS https://api.openai.com/v1/threads/${THREAD_ID}/messages \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "OpenAI-Beta: assistants=v2" \
+            -d "$BODY" \
+            | jq -r '"posted message id: \(.id)"'
+
+      - name: (Optional) Kick off a run if an assistant is configured
+        if: ${{ secrets.OPENAI_ASSISTANT_ID != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
+          ASSISTANT_ID: ${{ secrets.OPENAI_ASSISTANT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sS https://api.openai.com/v1/threads/${THREAD_ID}/runs \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "OpenAI-Beta: assistants=v2" \
+            -d "$(jq -n --arg a "$ASSISTANT_ID" '{assistant_id:$a}')" \
+            | jq -r '"created run id: \(.id)"'
