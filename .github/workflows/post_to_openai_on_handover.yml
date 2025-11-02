@@ -1,3 +1,117 @@
+name: Post to OpenAI Thread (on handover completion or manual)
+
+on:
+  workflow_run:
+    workflows: ["SBX Handover Sync"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Artifact to fetch
+        default: handover-status
+      api_key_secret:
+        description: Secret name that stores OpenAI API key
+        default: OPENAI_API_KEY
+      thread_secret:
+        description: Secret name that stores thread id
+        default: OPENAI_THREAD_ID
+      assistant_secret:
+        description: Optional secret name for assistant id
+        default: OPENAI_ASSISTANT_ID
+
+jobs:
+  post-to-thread:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download handover artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name || 'handover-status' }}
+          path: handover
+
+      - name: Build message text
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS=$(jq -r '.timestamp_utc // empty' handover/status.json)
+          RUN_URL=$(jq -r '.workflow_url // empty' handover/status.json)
+          HOST=$(jq -r '.runner_hostname // empty' handover/status.json)
+          LAST_LINE=""
+          if [ -f handover/SBX_Handover.md ]; then
+            LAST_LINE=$(tail -n 1 handover/SBX_Handover.md || true)
+          fi
+
+          {
+            echo "SBX handover sync — ${TS}"
+            [ -n "$LAST_LINE" ] && echo "$LAST_LINE"
+            [ -n "$RUN_URL" ]  && echo "run: ${RUN_URL}"
+            [ -n "$HOST" ]     && echo "host: ${HOST}"
+          } > message.txt
+          echo "TEXT<<EOF" >> "$GITHUB_OUTPUT"
+          cat message.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Post message to OpenAI thread (with retries)
+        env:
+          OPENAI_API_KEY: ${{ secrets[ inputs.api_key_secret || 'OPENAI_API_KEY' ] }}
+          THREAD_ID:      ${{ secrets[ inputs.thread_secret   || 'OPENAI_THREAD_ID' ] }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY=$(jq -n --arg text "${{ steps.build.outputs.TEXT }}" \
+            '{role:"user", content:[{type:"text", text:$text}] }')
+          for i in 1 2 3 4 5; do
+            STATUS=0
+            RESP=$(curl -sS -w '\n%{http_code}\n' https://api.openai.com/v1/threads/${THREAD_ID}/messages \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+              -H "OpenAI-Beta: assistants=v2" \
+              -d "$BODY") || STATUS=$?
+            CODE=$(echo "$RESP" | tail -n1)
+            BODYJSON=$(echo "$RESP" | head -n -1)
+            if [ "$STATUS" -eq 0 ] && [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
+              echo "$BODYJSON" | jq -r '"posted message id: \(.id)"'
+              break
+            fi
+            echo "OpenAI POST failed (try $i, code $CODE). Retrying..."
+            sleep $((2**i))  # exponential backoff: 2,4,8,16,32
+            if [ "$i" -eq 5 ]; then
+              echo "Giving up after 5 attempts."
+              echo "$BODYJSON" | jq . || true
+              exit 1
+            fi
+          done
+
+      - name: (Optional) Kick off a run if assistant secret is set
+        if: ${{ secrets[ inputs.assistant_secret || 'OPENAI_ASSISTANT_ID' ] != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets[ inputs.api_key_secret    || 'OPENAI_API_KEY' ] }}
+          THREAD_ID:      ${{ secrets[ inputs.thread_secret      || 'OPENAI_THREAD_ID' ] }}
+          ASSISTANT_ID:   ${{ secrets[ inputs.assistant_secret   || 'OPENAI_ASSISTANT_ID' ] }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            STATUS=0
+            RESP=$(curl -sS -w '\n%{http_code}\n' https://api.openai.com/v1/threads/${THREAD_ID}/runs \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+              -H "OpenAI-Beta: assistants=v2" \
+              -d "$(jq -n --arg a "$ASSISTANT_ID" '{assistant_id:$a}')" ) || STATUS=$?
+            CODE=$(echo "$RESP" | tail -n1)
+            BODYJSON=$(echo "$RESP" | head -n -1)
+            if [ "$STATUS" -eq 0 ] && [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
+              echo "$BODYJSON" | jq -r '"created run id: \(.id)"'
+              break
+            fi
+            echo "OpenAI RUN failed (try $i, code $CODE). Retrying..."
+            sleep $((2**i))
+            [ "$i" -eq 3 ] && { echo "$BODYJSON" | jq . || true; exit 1; }
+          done
 name: Post to OpenAI Thread (on handover completion)
 
 on:
