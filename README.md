@@ -38,6 +38,8 @@ How to trigger
 - VS Code Task: Run the build task (Cmd/Ctrl+Shift+B) and select "Append SBX handover timestamp" or the dry-run / PR-mode tasks.
 - Makefile: run `make handover-sync` (or `make handover-dry`, `make handover-pr`).
 - GitHub Actions: Actions tab -> "SBX Handover Sync" -> Run workflow. Use the `use_pr_mode` input to push to a PR branch instead of main.
+  
+	Note: PR mode is disabled by default; you can enable it per-run by setting the `use_pr_mode` input when dispatching the workflow.
 
 How to run
 
