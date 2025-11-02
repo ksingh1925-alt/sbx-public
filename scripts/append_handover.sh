@@ -72,6 +72,13 @@ echo "[info] preparing single commit containing $HANDOVER_FILE and $STATUS_FILE"
 # other trace fields but leave the commit field empty. If you need the final
 # commit SHA recorded, the script could create a second commit after (currently
 # avoided to keep a single commit).
+# Build workflow_url if running in Actions or if env vars available
+WORKFLOW_URL=""
+if [[ -n "${GITHUB_RUN_ID-}" && -n "${GITHUB_REPOSITORY-}" ]]; then
+  GITHUB_SERVER_URL=${GITHUB_SERVER_URL:-https://github.com}
+  WORKFLOW_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+fi
+
 cat > "$STATUS_FILE" <<EOF
 {
   "timestamp_utc": "$TIMESTAMP",
@@ -79,7 +86,7 @@ cat > "$STATUS_FILE" <<EOF
   "file": "$HANDOVER_FILE",
   "run_id": "${GITHUB_RUN_ID-}",
   "runner_hostname": "$(hostname 2>/dev/null || true)",
-  "workflow_url": ""
+  "workflow_url": "${WORKFLOW_URL}"
 }
 EOF
 
