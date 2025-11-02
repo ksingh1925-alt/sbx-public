@@ -81,3 +81,7 @@ echo -n "$thread_id" | gh secret set OPENAI_THREAD_ID --repo "$REPO"
 
 echo "Done. COPY THIS VALUE into any other systems that need it (or use the secret in Actions)."
 echo "$thread_id"
+./scripts/append_handover.sh --dry-run
+
+./scripts/append_handover.sh --dry-run
+
