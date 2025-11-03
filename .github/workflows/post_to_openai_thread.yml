@@ -8,7 +8,7 @@ on:
         required: false
         default: "false"
   schedule:
-    - cron: "0 * * * *"  # hourly
+    - cron: "0 * * * *"  # hourly run
 
 permissions:
   contents: write
@@ -16,314 +16,153 @@ permissions:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
-      # Raw (possibly messy) secrets from repo settings
-      RAW_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      RAW_OPENAI_THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
-      RAW_OPENAI_ASSISTANT_ID: ${{ secrets.OPENAI_ASSISTANT_ID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
+      OPENAI_ASSISTANT_ID: ${{ secrets.OPENAI_ASSISTANT_ID }}
+      SBX_FEED_URL: ${{ secrets.SBX_FEED_URL }}
 
     steps:
+      - name: Sanity checks
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY" || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
+          test -n "$OPENAI_THREAD_ID" || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
+          test -n "$OPENAI_ASSISTANT_ID" || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
+          echo "✅ Core secrets OK."
+          [ -n "${SBX_FEED_URL:-}" ] && echo "✅ SBX_FEED_URL OK." || echo "⚠️ No SBX_FEED_URL (feed step will skip)."
+
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
 
-      - name: Set Git author
-        run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name  "github-actions[bot]"
-
-      - name: Sanitize & validate secrets
-        id: sanitize
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          strip() { printf %s "$1" | tr -d '\r' | sed 's/^ *//; s/ *$//' | sed 's/^"//; s/"$//' | sed "s/^'//; s/'$//"; }
-
-          OPENAI_API_KEY_CLEAN="$(strip "${RAW_OPENAI_API_KEY:-}")"
-          OPENAI_THREAD_ID_CLEAN="$(strip "${RAW_OPENAI_THREAD_ID:-}")"
-          OPENAI_ASSISTANT_ID_CLEAN="$(strip "${RAW_OPENAI_ASSISTANT_ID:-}")"
-
-          # Basic presence checks
-          [ -n "$OPENAI_API_KEY_CLEAN" ]        || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
-          [ -n "$OPENAI_THREAD_ID_CLEAN" ]      || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
-          [ -n "$OPENAI_ASSISTANT_ID_CLEAN" ]   || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
-
-          # Format checks
-          case "$OPENAI_API_KEY_CLEAN" in sk-*) : ;; *) echo "❌ OPENAI_API_KEY must start with sk-"; exit 1 ;; esac
-          case "$OPENAI_THREAD_ID_CLEAN" in thread_*) : ;; *) echo "❌ OPENAI_THREAD_ID must start with thread_"; exit 1 ;; esac
-          case "$OPENAI_ASSISTANT_ID_CLEAN" in asst_*) : ;; *) echo "❌ OPENAI_ASSISTANT_ID must start with asst_"; exit 1 ;; esac
-
-          # Export sanitized values to the job env for later steps
-          {
-            echo "OPENAI_API_KEY=$OPENAI_API_KEY_CLEAN"
-            echo "OPENAI_THREAD_ID=$OPENAI_THREAD_ID_CLEAN"
-            echo "OPENAI_ASSISTANT_ID=$OPENAI_ASSISTANT_ID_CLEAN"
-          } >> "$GITHUB_ENV"
-
-          echo "✅ Secrets sanitized & validated."
-
-      - name: Fetch SBX live feed and append short summary
-        if: ${{ always() }}
-        shell: bash
-        env:
-          SBX_FEED_URL: ${{ secrets.SBX_FEED_URL }}
-        run: |
-          set -euo pipefail
-
-          echo "== Fetching SBX feed =="
-          if [ -z "${SBX_FEED_URL:-}" ]; then
-            echo "No SBX_FEED_URL secret set; skipping fetch."
-            {
-              echo ""
-              echo "SBX feed (auto-summary):"
-              echo "(SBX_FEED_URL not configured)"
-            } >> /tmp/body.txt
-            exit 0
-          fi
-
-          HTTP=$(curl -sS -w '%{http_code}' -o /tmp/sbx.json "$SBX_FEED_URL" || true)
-          echo "SBX HTTP: $HTTP"
-          if [ "$HTTP" != "200" ]; then
-            {
-              echo ""
-              echo "SBX feed (auto-summary):"
-              echo "Fetch failed (HTTP $HTTP)"
-            } >> /tmp/body.txt
-            exit 0
-          fi
-
-          {
-            echo ""
-            echo "SBX feed (auto-summary):"
-            if jq -e 'has("data") and (.data|type=="array")' /tmp/sbx.json >/dev/null 2>&1; then
-              jq -r '
-                .data
-                | (.|length as $n | "rows: \($n)")
-                , (.[0:5] | map(
-                    [
-                      (.symbol // .ticker // "-"),
-                      (.grade // .Agrade // .rank // "-"),
-                      (.bias // "-"),
-                      (.setup // "-"),
-                      (.session // "-"),
-                      (.timestamp // .time // "-")
-                    ] | @tsv
-                  ) | join("\n"))
-              ' /tmp/sbx.json
-            elif jq -e 'type=="array"' /tmp/sbx.json >/dev/null 2>&1; then
-              jq -r '
-                (.|length as $n | "rows: \($n)"),
-                (.[0:5] | map(
-                  [
-                    (.symbol // .ticker // "-"),
-                    (.grade // .Agrade // .rank // "-"),
-                    (.bias // "-"),
-                    (.setup // "-"),
-                    (.session // "-"),
-                    (.timestamp // .time // "-")
-                  ] | @tsv
-                ) | join("\n"))
-              ' /tmp/sbx.json
-            else
-              jq -r 'to_entries | map("\(.key)=\(.value|tostring)") | .[0:12] | join(", ")' /tmp/sbx.json
-            fi
-          } >> /tmp/body.txt || {
-            echo "Failed to summarize SBX feed; appending raw length only."
-            {
-              echo ""
-              echo "SBX feed (auto-summary): parse error"
-            } >> /tmp/body.txt
-          }
-
-      - name: Append handover tail (optional)
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "" >> /tmp/body.txt
-          echo "---" >> /tmp/body.txt
-          echo "Handover tail (20 lines):" >> /tmp/body.txt
-          (tail -n 20 handover/SBX_HandoVER.md 2>/dev/null || echo "(no handover file yet)") >> /tmp/body.txt
-
-      - name: Verify thread exists (GET)
-        shell: bash
-        run: |
-          set -euo pipefail
-          HTTP=$(curl -sS -w '\nHTTP:%{http_code}\n' \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -H "OpenAI-Beta: assistants=v2" \
-            "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID")
-          echo "$HTTP"
-          grep -q 'HTTP:200' <<<"$HTTP" || { echo "❌ Thread not found / auth failed"; exit 1; }
-          echo "✅ Thread OK."
-
-      - name: Verify assistant exists (GET)
-        shell: bash
-        run: |
-          set -euo pipefail
-          HTTP=$(curl -sS -w '\nHTTP:%{http_code}\n' \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -H "OpenAI-Beta: assistants=v2" \
-            "https://api.openai.com/v1/assistants/$OPENAI_ASSISTANT_ID")
-          echo "$HTTP"
-          grep -q 'HTTP:200' <<<"$HTTP" || { echo "❌ Assistant not found / auth failed"; exit 1; }
-          echo "✅ Assistant OK."
-
-      - name: Compose message (timestamp + optional tail)
+      - name: Compose base message
         id: compose
         shell: bash
         run: |
           set -euo pipefail
           TS="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          LAST="$(tail -n 1 handover/SBX_HandoVER.md 2>/dev/null || true)"
+          [ -z "$LAST" ] && LAST="(no last line found in handover/SBX_HandoVER.md)"
+          printf 'SBX handover sync — %s\n%s\n' "$TS" "$LAST" > /tmp/body.txt
+          echo "✅ Base message ready"
 
-          LAST_LINE="(no last line found in handover/SBX_HandoVER.md)"
-          if [ -f handover/SBX_HandoVER.md ]; then
-            LL=$(tail -n 1 handover/SBX_HandoVER.md || true)
-            [ -n "$LL" ] && LAST_LINE="$LL"
-          fi
-
-          TAIL_BLOCK=""
-          if [ -f handover/SBX_HandoVER.md ]; then
-            TAIL_BLOCK="$(tail -n 20 handover/SBX_HandoVER.md | sed 's/"/\\"/g')"
-          fi
-
-          MSG="SBX handover sync — ${TS}\n${LAST_LINE}"
-          if [ -n "$TAIL_BLOCK" ]; then
-            MSG="${MSG}\n\n---\nHandover tail (20 lines):\n${TAIL_BLOCK}"
-          fi
-
-          printf '%s' "$MSG" > /tmp/body.txt
-          echo "Preview:"
-          cat /tmp/body.txt
-          echo
-
-      - name: Dry run (skip API calls)
-        if: ${{ github.event.inputs.dry_run == 'true' }}
+      - name: Fetch SBX live feed
+        if: env.SBX_FEED_URL != ''
         shell: bash
         run: |
           set -euo pipefail
-          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' | tee /tmp/payload.json
-          echo "🧪 Dry run finished."
+          echo "📡 Fetching SBX feed from $SBX_FEED_URL"
+          HTTP=$(curl -sS -w '%{http_code}' -o /tmp/feed.json "$SBX_FEED_URL" || true)
+          echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "⚠️ Feed fetch failed ($HTTP)" >> /tmp/body.txt
+            exit 0
+          fi
+
+          {
+            echo ""
+            echo "---"
+            echo "SBX Feed Snapshot (first 5 rows):"
+            jq -r '
+              if has("data") then .data else . end
+              | .[0:5]
+              | map(
+                  (.symbol // .ticker // "-")
+                  + "\t" + (.grade // "-")
+                  + "\t" + (.bias // "-")
+                  + "\t" + (.setup // "-")
+                  + "\t" + (.session // "-")
+                )
+              | join("\n")
+            ' /tmp/feed.json 2>/dev/null || head -n 40 /tmp/feed.json
+          } >> /tmp/body.txt
+
+          mkdir -p handover
+          cp /tmp/feed.json handover/SBX_Feed_Snapshot.json
+          git add handover/SBX_Feed_Snapshot.json || true
+          git commit -m "ci: SBX feed snapshot" || true
+          echo "✅ SBX feed summary appended."
+
+      - name: Verify thread exists
+        run: |
+          set -euo pipefail
+          curl -sS -w '\nHTTP:%{http_code}\n' \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "OpenAI-Beta: assistants=v2" \
+            "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}" \
+            | tee /tmp/thread_check.txt
+          grep -q 'HTTP:200' /tmp/thread_check.txt || { echo "❌ Thread not found"; exit 1; }
+
+      - name: Dry run check
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          echo "Dry run enabled:"
+          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' | tee payload.json
           exit 0
 
-      - name: Post message to thread
+      - name: Post message to OpenAI
         id: post
-        shell: bash
         run: |
           set -euo pipefail
           jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' > /tmp/payload.json
+          HTTP=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "OpenAI-Beta: assistants=v2" \
+            "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}/messages" \
+            --data @/tmp/payload.json)
+          echo "HTTP: $HTTP"
+          [ "$HTTP" = "200" ] || { cat /tmp/resp.json; exit 1; }
+          echo "✅ Message posted."
 
-          MAX=4
-          for n in $(seq 1 $MAX); do
-            CODE=$(curl -sS -o /tmp/msg.json -w '%{http_code}' \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
-              -H "Content-Type: application/json" \
-              -H "OpenAI-Beta: assistants=v2" \
-              -d @/tmp/payload.json \
-              "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages" || true)
-            echo "HTTP: $CODE"
-            cat /tmp/msg.json || true
-            echo
-            if [ "$CODE" = "200" ]; then
-              MSG_ID=$(jq -r '.id // empty' /tmp/msg.json)
-              [ -n "$MSG_ID" ] && { echo "MSG_ID=$MSG_ID" >>"$GITHUB_OUTPUT"; echo "✅ Message posted: $MSG_ID"; break; }
-            fi
-            if [ "$n" -lt "$MAX" ]; then
-              sleep $((2**n))
-            else
-              echo "❌ Failed to post after $MAX attempts"; exit 1
-            fi
-          done
-
-      - name: Create run (trigger assistant)
+      - name: Create run
         id: run
-        shell: bash
         run: |
           set -euo pipefail
-          CODE=$(curl -sS -o /tmp/run.json -w '%{http_code}' \
+          echo "Creating run..."
+          HTTP=$(curl -sS -o /tmp/run.json -w '%{http_code}' \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "Content-Type: application/json" \
             -H "OpenAI-Beta: assistants=v2" \
             -d "{\"assistant_id\":\"$OPENAI_ASSISTANT_ID\"}" \
-            "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/runs")
-          echo "HTTP: $CODE"
-          cat /tmp/run.json || true
-          echo
-          [ "$CODE" = "200" ] || { echo "❌ Failed to create run"; exit 1; }
-          RUN_ID=$(jq -r '.id // empty' /tmp/run.json)
-          [ -n "$RUN_ID" ] || { echo "❌ No run id"; exit 1; }
-          echo "RUN_ID=$RUN_ID" >>"$GITHUB_OUTPUT"
-          echo "✅ Run: $RUN_ID"
+            "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}/runs")
+          echo "HTTP: $HTTP"
+          [ "$HTTP" = "200" ] || { cat /tmp/run.json; exit 1; }
+          RUN_ID=$(jq -r '.id' /tmp/run.json)
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "✅ Run started."
 
-      - name: Wait for run completion
-        shell: bash
+      - name: Wait for completion
         run: |
           set -euo pipefail
-          RID="${{ steps.run.outputs.RUN_ID }}"
-          MAX_WAIT=300
-          ELAPSED=0
-          while [ $ELAPSED -lt $MAX_WAIT ]; do
-            curl -sS \
+          RUN_ID="${{ steps.run.outputs.RUN_ID }}"
+          echo "Waiting for run $RUN_ID..."
+          for i in $(seq 1 100); do
+            STATUS=$(curl -sS \
               -H "Authorization: Bearer $OPENAI_API_KEY" \
               -H "OpenAI-Beta: assistants=v2" \
-              "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/runs/$RID" > /tmp/run_status.json
-            STATUS=$(jq -r '.status // empty' /tmp/run_status.json)
-            echo "status: $STATUS"
-            case "$STATUS" in
-              completed) echo "✅ Completed"; break;;
-              failed|cancelled|expired) echo "❌ $STATUS"; cat /tmp/run_status.json; exit 1;;
-              *) sleep 3; ELAPSED=$((ELAPSED+3));;
-            esac
+              "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}/runs/${RUN_ID}" \
+              | jq -r '.status')
+            echo "Status: $STATUS"
+            [ "$STATUS" = "completed" ] && break
+            [ "$STATUS" = "failed" -o "$STATUS" = "cancelled" ] && exit 1
+            sleep 3
           done
-          [ $ELAPSED -lt $MAX_WAIT ] || { echo "❌ Timed out"; exit 1; }
 
-      - name: Fetch assistant reply
-        id: fetch
-        shell: bash
+      - name: Get assistant response
+        id: response
         run: |
           set -euo pipefail
           curl -sS \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "OpenAI-Beta: assistants=v2" \
-            "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages?order=desc&limit=10" \
-            > /tmp/messages.json
-
-          REPLY=$(jq -r '.data[] | select(.role=="assistant") | .content[0].text.value // empty' /tmp/messages.json | head -n 1)
-          [ -n "$REPLY" ] || REPLY="(no assistant reply found)"
-          printf '%s' "$REPLY" > /tmp/assistant_reply.txt
-
-          echo "Assistant says:"
-          head -n 40 /tmp/assistant_reply.txt || true
-          echo
-
-      - name: Append reply to handover and push
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p handover
-          [ -f handover/SBX_HandoVER.md ] || echo "# SBX Handover" > handover/SBX_HandoVER.md
-
-          {
-            echo
-            echo "Assistant reply @ $(date -u +'%Y-%m-%d %H:%M:%S UTC'):"
-            cat /tmp/assistant_reply.txt
-          } >> handover/SBX_HandoVER.md
-
-          echo "📝 Updated handover/SBX_HandoVER.md tail:"
-          tail -n 30 handover/SBX_HandoVER.md || true
-
-          git add handover/SBX_HandoVER.md
-          git commit -m "ci: append assistant reply ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || true
-          git pull --rebase
-          git push
+            "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}/messages?order=desc&limit=5" > /tmp/messages.json
+          jq '.' /tmp/messages.json | head -120
+          REPLY=$(jq -r '.data[] | select(.role=="assistant") | .content[0].text.value' /tmp/messages.json | head -n 1)
+          echo "Assistant reply:"
+          echo "$REPLY"
 
       - name: Summary
-        if: always()
-        shell: bash
         run: |
           echo "✅ Complete"
-          echo "Message ID: ${{ steps.post.outputs.MSG_ID }}"
-          echo "Run ID:     ${{ steps.run.outputs.RUN_ID }}"
