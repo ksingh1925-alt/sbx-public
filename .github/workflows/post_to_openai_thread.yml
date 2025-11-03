@@ -18,9 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
-      OPENAI_ASSISTANT_ID: ${{ secrets.OPENAI_ASSISTANT_ID }}
+      # Raw (possibly messy) secrets from repo settings
+      RAW_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      RAW_OPENAI_THREAD_ID: ${{ secrets.OPENAI_THREAD_ID }}
+      RAW_OPENAI_ASSISTANT_ID: ${{ secrets.OPENAI_ASSISTANT_ID }}
 
     steps:
       - name: Checkout repo
@@ -34,19 +35,36 @@ jobs:
           git config --local user.email "actions@github.com"
           git config --local user.name  "github-actions[bot]"
 
-      - name: Sanity checks (presence + simple format)
+      - name: Sanitize & validate secrets
+        id: sanitize
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${OPENAI_API_KEY:-}"        || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
-          test -n "${OPENAI_THREAD_ID:-}"      || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
-          test -n "${OPENAI_ASSISTANT_ID:-}"   || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
 
-          case "$OPENAI_API_KEY" in sk-*) : ;; *) echo "❌ OPENAI_API_KEY must start with sk-"; exit 1 ;; esac
-          case "$OPENAI_THREAD_ID" in thread_*) : ;; *) echo "❌ OPENAI_THREAD_ID must start with thread_"; exit 1 ;; esac
-          case "$OPENAI_ASSISTANT_ID" in asst_*) : ;; *) echo "❌ OPENAI_ASSISTANT_ID must start with asst_"; exit 1 ;; esac
+          strip() { printf %s "$1" | tr -d '\r' | sed 's/^ *//; s/ *$//' | sed 's/^"//; s/"$//' | sed "s/^'//; s/'$//"; }
 
-          echo "✅ Secrets look well-formed."
+          OPENAI_API_KEY_CLEAN="$(strip "${RAW_OPENAI_API_KEY:-}")"
+          OPENAI_THREAD_ID_CLEAN="$(strip "${RAW_OPENAI_THREAD_ID:-}")"
+          OPENAI_ASSISTANT_ID_CLEAN="$(strip "${RAW_OPENAI_ASSISTANT_ID:-}")"
+
+          # Basic presence checks
+          [ -n "$OPENAI_API_KEY_CLEAN" ]        || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
+          [ -n "$OPENAI_THREAD_ID_CLEAN" ]      || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
+          [ -n "$OPENAI_ASSISTANT_ID_CLEAN" ]   || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
+
+          # Format checks
+          case "$OPENAI_API_KEY_CLEAN" in sk-*) : ;; *) echo "❌ OPENAI_API_KEY must start with sk-"; exit 1 ;; esac
+          case "$OPENAI_THREAD_ID_CLEAN" in thread_*) : ;; *) echo "❌ OPENAI_THREAD_ID must start with thread_"; exit 1 ;; esac
+          case "$OPENAI_ASSISTANT_ID_CLEAN" in asst_*) : ;; *) echo "❌ OPENAI_ASSISTANT_ID must start with asst_"; exit 1 ;; esac
+
+          # Export sanitized values to the job env for later steps
+          {
+            echo "OPENAI_API_KEY=$OPENAI_API_KEY_CLEAN"
+            echo "OPENAI_THREAD_ID=$OPENAI_THREAD_ID_CLEAN"
+            echo "OPENAI_ASSISTANT_ID=$OPENAI_ASSISTANT_ID_CLEAN"
+          } >> "$GITHUB_ENV"
+
+          echo "✅ Secrets sanitized & validated."
 
       - name: Verify thread exists (GET)
         shell: bash
@@ -191,7 +209,6 @@ jobs:
             "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages?order=desc&limit=10" \
             > /tmp/messages.json
 
-          # first assistant message text
           REPLY=$(jq -r '.data[] | select(.role=="assistant") | .content[0].text.value // empty' /tmp/messages.json | head -n 1)
           [ -n "$REPLY" ] || REPLY="(no assistant reply found)"
           printf '%s' "$REPLY" > /tmp/assistant_reply.txt
@@ -216,7 +233,6 @@ jobs:
           echo "📝 Updated handover/SBX_HandoVER.md tail:"
           tail -n 30 handover/SBX_HandoVER.md || true
 
-          # Safe push
           git add handover/SBX_HandoVER.md
           git commit -m "ci: append assistant reply ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || true
           git pull --rebase
