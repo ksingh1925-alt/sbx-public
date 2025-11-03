@@ -61,6 +61,23 @@ jobs:
           [ -n "$EXTRA" ] && TEXT="${TEXT}\n${EXTRA}"
 
           printf '%s' "$TEXT" > /tmp/body.txt
+
+          # Append optional data snippet: include last 20 lines of handover and
+          # a sample of data/SBX_Insights.csv if present.
+          SNIP=""
+          if [ -f handover/SBX_HandoVER.md ]; then
+            SNIP="${SNIP}\n\n---\nHandover tail (20 lines):\n"
+            SNIP="${SNIP}$(tail -n 20 handover/SBX_HandoVER.md)"
+          fi
+
+          if [ -f data/SBX_Insights.csv ]; then
+            SNIP="${SNIP}\n\n---\nSBX_Insights.csv head (20 rows):\n"
+            SNIP="${SNIP}$(head -n 20 data/SBX_Insights.csv)"
+          fi
+
+          # Combine main body and snippet into /tmp/body.txt
+          printf '%s\n%s' "$(cat /tmp/body.txt)" "$SNIP" > /tmp/body.txt
+
           echo "Preview:"
           cat /tmp/body.txt
           echo ""
