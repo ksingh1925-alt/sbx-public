@@ -8,10 +8,10 @@ on:
         required: false
         default: "false"
   schedule:
-    - cron: "0 * * * *"  # hourly; remove if you only want manual runs
+    - cron: "0 * * * *" # hourly; remove if you only want manual runs
 
 permissions:
-  contents: write  # we will append to handover/SBX_HandoVER.md and push
+  contents: read
 
 jobs:
   post:
@@ -24,18 +24,22 @@ jobs:
 
     steps:
       - name: Sanity checks
+        shell: bash
         run: |
-          test -n "$OPENAI_API_KEY"       || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
-          test -n "$OPENAI_THREAD_ID"     || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
-          test -n "$OPENAI_ASSISTANT_ID"  || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"        || { echo "❌ Missing OPENAI_API_KEY"; exit 1; }
+          test -n "$OPENAI_THREAD_ID"      || { echo "❌ Missing OPENAI_THREAD_ID"; exit 1; }
+          test -n "$OPENAI_ASSISTANT_ID"   || { echo "❌ Missing OPENAI_ASSISTANT_ID"; exit 1; }
+          # quick format checks (best-effort)
+          case "$OPENAI_THREAD_ID" in thread_*) : ;; *) echo "⚠️  Thread id doesn't start with 'thread_' (continuing)";; esac
+          case "$OPENAI_ASSISTANT_ID" in asst_*) : ;; *) echo "⚠️  Assistant id doesn't start with 'asst_' (continuing)";; esac
           echo "✅ Secrets present."
 
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
-      - name: Set Git author
+      - name: Set Git author (repo-only)
+        shell: bash
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name  "github-actions[bot]"
@@ -48,6 +52,7 @@ jobs:
           TS="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           LAST="$(tail -n 1 handover/SBX_HandoVER.md 2>/dev/null || true)"
           [ -z "$LAST" ] && LAST="(no last line found in handover/SBX_HandoVER.md)"
+
           EXTRA=""
           if [ -f status.json ]; then
             RUN_URL=$(jq -r '.workflow_url // empty' status.json)
@@ -55,17 +60,22 @@ jobs:
             [ -n "$RUN_URL" ] && EXTRA="${EXTRA}\nrun: ${RUN_URL}"
             [ -n "$HOST" ] && EXTRA="${EXTRA}\nhost: ${HOST}"
           fi
+
           HANDOVER_SUMMARY=""
           if [ -f handover/status.json ]; then
             HANDOVER_SUMMARY=$(jq -r '.summary // empty' handover/status.json)
           fi
+
           TEXT="SBX handover sync — ${TS}\n${LAST}"
           [ -n "$HANDOVER_SUMMARY" ] && TEXT="${TEXT}\nsummary: ${HANDOVER_SUMMARY}"
-          [ -n "$EXTRA" ]            && TEXT="${TEXT}\n${EXTRA}"
-          printf '%s' "$TEXT" > /tmp/body.txt
-          echo "Preview:"; cat /tmp/body.txt; echo ""
+          [ -n "$EXTRA" ] && TEXT="${TEXT}\n${EXTRA}"
 
-      - name: Verify thread exists
+          printf '%s' "$TEXT" > /tmp/body.txt
+          echo "Preview:"
+          cat /tmp/body.txt
+          echo ""
+
+      - name: Verify thread exists (GET)
         shell: bash
         run: |
           set -euo pipefail
@@ -75,13 +85,15 @@ jobs:
             -H "OpenAI-Beta: assistants=v2" \
             "https://api.openai.com/v1/threads/${OPENAI_THREAD_ID}" \
             | tee /tmp/thread_check.txt
-          grep -q 'HTTP:200' /tmp/thread_check.txt || { echo "❌ Thread not found"; exit 1; }
+          grep -q 'HTTP:200' /tmp/thread_check.txt || { echo "❌ Thread not found or auth failed"; exit 1; }
 
-      - name: Dry run check
+      - name: Dry run? (print payload and exit)
         if: ${{ github.event.inputs.dry_run == 'true' }}
+        shell: bash
         run: |
-          echo "Dry run enabled. Would post:"
-          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}'
+          set -euo pipefail
+          jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' | tee /tmp/payload.json
+          echo "🧪 Dry run enabled — not calling the API."
           exit 0
 
       - name: Post message to OpenAI (Assistants v2)
@@ -89,11 +101,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Build message payload safely
           jq -nc --rawfile t /tmp/body.txt '{role:"user", content:[{type:"text", text:$t}]}' > /tmp/payload.json
+          echo "Message payload:"; cat /tmp/payload.json
 
           MAX_RETRIES=4
           for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $attempt: posting message..."
+            echo "Attempt $attempt: posting message…"
             HTTP_CODE=$(
               curl -sS -o /tmp/resp.json -w '%{http_code}' \
                 "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages" \
@@ -102,20 +116,23 @@ jobs:
                 -H "OpenAI-Beta: assistants=v2" \
                 --data @/tmp/payload.json || true
             )
-            echo "HTTP: $HTTP_CODE"
-            cat /tmp/resp.json || true
+            echo "HTTP: $HTTP_CODE"; cat /tmp/resp.json || true
+
             if [ "$HTTP_CODE" = "200" ]; then
               MSG_ID=$(jq -r '.id // empty' /tmp/resp.json || true)
               if [ -n "$MSG_ID" ]; then
+                echo "✅ Posted message: $MSG_ID"
                 echo "MSG_ID=$MSG_ID" >> "$GITHUB_OUTPUT"
                 break
               fi
             fi
+
             if [ "$attempt" -lt "$MAX_RETRIES" ]; then
               SLEEP=$((2 ** attempt))
-              echo "Retrying in ${SLEEP}s..."; sleep "$SLEEP"
+              echo "Retrying in ${SLEEP}s…"; sleep "$SLEEP"
             else
-              echo "❌ Failed after $MAX_RETRIES attempts"; exit 1
+              echo "❌ Failed after $MAX_RETRIES attempts"
+              exit 1
             fi
           done
 
@@ -124,27 +141,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Trim any stray CR/LF/whitespace in secret (GUI pastes sometimes add them)
+          ASST="$(printf '%s' "${OPENAI_ASSISTANT_ID}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          case "$ASST" in
+            asst_*) : ;;
+            *) echo "❌ OPENAI_ASSISTANT_ID looks invalid: '$ASST'"; exit 1 ;;
+          esac
+          # Build JSON payload safely with jq
+          jq -n --arg asst "$ASST" '{assistant_id:$asst}' > /tmp/run_payload.json
+          echo "Run payload:"; cat /tmp/run_payload.json
+
           HTTP_CODE=$(
             curl -sS -o /tmp/run.json -w '%{http_code}' \
               "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/runs" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $OPENAI_API_KEY" \
               -H "OpenAI-Beta: assistants=v2" \
-              -d "{\"assistant_id\":\"$OPENAI_ASSISTANT_ID\"}"
+              --data @/tmp/run_payload.json
           )
           echo "HTTP: $HTTP_CODE"; cat /tmp/run.json || true
           [ "$HTTP_CODE" = "200" ] || { echo "❌ Failed to create run"; exit 1; }
+
           RUN_ID=$(jq -r '.id // empty' /tmp/run.json)
           [ -n "$RUN_ID" ] || { echo "❌ No run ID"; exit 1; }
           echo "RUN_ID=$RUN_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for completion
+      - name: Wait for run completion
         shell: bash
         run: |
           set -euo pipefail
           RUN_ID="${{ steps.run.outputs.RUN_ID }}"
           MAX_WAIT=300
           ELAPSED=0
+          echo "Waiting for run $RUN_ID…"
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             curl -sS \
               -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -153,7 +182,7 @@ jobs:
             STATUS=$(jq -r '.status // empty' /tmp/run_status.json)
             echo "status: $STATUS"
             case "$STATUS" in
-              completed) break ;;
+              completed) echo "✅ Completed"; break ;;
               failed|cancelled|expired) echo "❌ $STATUS"; cat /tmp/run_status.json; exit 1 ;;
             esac
             sleep 3; ELAPSED=$((ELAPSED+3))
@@ -169,50 +198,22 @@ jobs:
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "OpenAI-Beta: assistants=v2" \
             "https://api.openai.com/v1/threads/$OPENAI_THREAD_ID/messages?order=desc&limit=10" > /tmp/messages.json
-          echo "Messages snapshot:"; jq '.data[0:3]' /tmp/messages.json
+          echo "Messages snapshot:"; jq '.' /tmp/messages.json | sed -n '1,140p'
           REPLY=$(
-            jq -r '.data[] | select(.role=="assistant") | .content[0].text.value // empty' /tmp/messages.json \
-            | head -n 1
+            jq -r '.data[] | select(.role=="assistant") | .content[0].text.value // empty' /tmp/messages.json | head -n 1
           )
-          [ -n "$REPLY" ] || REPLY="(no response)"
-          {
-            echo "RESPONSE<<EOF"
-            echo "$REPLY"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          [ -n "$REPLY" ] || REPLY="(no assistant reply found)"
+          echo "RESPONSE<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$REPLY"       >> "$GITHUB_OUTPUT"
+          echo "EOF"          >> "$GITHUB_OUTPUT"
           echo "Assistant says:"; echo "$REPLY"
 
-      - name: Append assistant reply to handover and commit
-        if: ${{ steps.response.outputs.RESPONSE != '' }}
-        env:
-          REPLY: ${{ steps.response.outputs.RESPONSE }}
-        run: |
-          set -euo pipefail
-          mkdir -p handover
-          FILE="handover/SBX_HandoVER.md"
-          if [ ! -f "$FILE" ]; then
-            echo "# SBX Handover" > "$FILE"
-            echo "" >> "$FILE"
-          fi
-          {
-            echo ""
-            echo "## Assistant reply — $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            echo ""
-            printf '%s\n' "$REPLY"
-          } >> "$FILE"
-          git add "$FILE"
-          if ! git diff --cached --quiet; then
-            git commit -m "append assistant reply from run ${GITHUB_RUN_ID}"
-            git push
-          else
-            echo "No changes to commit."
-          fi
-
       - name: Summary
+        shell: bash
         run: |
-          echo "✅ Complete"
-          echo "Message ID: ${{ steps.post.outputs.MSG_ID }}"
-          echo "Run ID:     ${{ steps.run.outputs.RUN_ID }}"
-          echo ""
-          echo "Response:"
+          echo "✅ OpenAI post complete."
+          echo "Message id:  ${{ steps.post.outputs.MSG_ID }}"
+          echo "Run id:      ${{ steps.run.outputs.RUN_ID }}"
+          echo
+          echo "Assistant response:"
           echo "${{ steps.response.outputs.RESPONSE }}"
