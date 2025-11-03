@@ -66,6 +66,88 @@ jobs:
 
           echo "✅ Secrets sanitized & validated."
 
+      - name: Fetch SBX live feed and append short summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SBX_FEED_URL: ${{ secrets.SBX_FEED_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "== Fetching SBX feed =="
+          if [ -z "${SBX_FEED_URL:-}" ]; then
+            echo "No SBX_FEED_URL secret set; skipping fetch."
+            {
+              echo ""
+              echo "SBX feed (auto-summary):"
+              echo "(SBX_FEED_URL not configured)"
+            } >> /tmp/body.txt
+            exit 0
+          fi
+
+          HTTP=$(curl -sS -w '%{http_code}' -o /tmp/sbx.json "$SBX_FEED_URL" || true)
+          echo "SBX HTTP: $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            {
+              echo ""
+              echo "SBX feed (auto-summary):"
+              echo "Fetch failed (HTTP $HTTP)"
+            } >> /tmp/body.txt
+            exit 0
+          fi
+
+          {
+            echo ""
+            echo "SBX feed (auto-summary):"
+            if jq -e 'has("data") and (.data|type=="array")' /tmp/sbx.json >/dev/null 2>&1; then
+              jq -r '
+                .data
+                | (.|length as $n | "rows: \($n)")
+                , (.[0:5] | map(
+                    [
+                      (.symbol // .ticker // "-"),
+                      (.grade // .Agrade // .rank // "-"),
+                      (.bias // "-"),
+                      (.setup // "-"),
+                      (.session // "-"),
+                      (.timestamp // .time // "-")
+                    ] | @tsv
+                  ) | join("\n"))
+              ' /tmp/sbx.json
+            elif jq -e 'type=="array"' /tmp/sbx.json >/dev/null 2>&1; then
+              jq -r '
+                (.|length as $n | "rows: \($n)"),
+                (.[0:5] | map(
+                  [
+                    (.symbol // .ticker // "-"),
+                    (.grade // .Agrade // .rank // "-"),
+                    (.bias // "-"),
+                    (.setup // "-"),
+                    (.session // "-"),
+                    (.timestamp // .time // "-")
+                  ] | @tsv
+                ) | join("\n"))
+              ' /tmp/sbx.json
+            else
+              jq -r 'to_entries | map("\(.key)=\(.value|tostring)") | .[0:12] | join(", ")' /tmp/sbx.json
+            fi
+          } >> /tmp/body.txt || {
+            echo "Failed to summarize SBX feed; appending raw length only."
+            {
+              echo ""
+              echo "SBX feed (auto-summary): parse error"
+            } >> /tmp/body.txt
+          }
+
+      - name: Append handover tail (optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "" >> /tmp/body.txt
+          echo "---" >> /tmp/body.txt
+          echo "Handover tail (20 lines):" >> /tmp/body.txt
+          (tail -n 20 handover/SBX_HandoVER.md 2>/dev/null || echo "(no handover file yet)") >> /tmp/body.txt
+
       - name: Verify thread exists (GET)
         shell: bash
         run: |
