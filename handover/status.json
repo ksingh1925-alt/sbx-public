@@ -1,9 +1,21 @@
 {
-  "timestamp_utc": "2025-11-04 22:10:11 UTC",
-  "commit": "",
-  "file": "handover/SBX_Handover.md",
-  "generated_by": "github-actions",
-  "run_id": "19084282870",
-  "runner_hostname": "runnervmf2e7y",
-  "workflow_url": "https://github.com/ksingh1925-alt/sbx-public/actions/runs/19084282870"
+  "as_of_utc": "2025-11-04T23:03:02+00:00",
+  "repo_dir": "/content/drive/MyDrive/sbx-public",
+  "handover_dir": "/content/drive/MyDrive/sbx-public/handover",
+  "files": {
+    "heartbeat": "/content/drive/MyDrive/SBX/results_kul/_status_heartbeat.json",
+    "alerts": "/content/drive/MyDrive/SBX/results_kul/_alerts.json",
+    "shortlist": "/content/drive/MyDrive/SBX/results_kul/SBX_Shortlist_NY_latest.csv",
+    "tone": "/content/drive/MyDrive/SBX/results_kul/SBX_SessionTone_latest.json",
+    "whatif": null,
+    "bias": "/content/drive/MyDrive/SBX/results_kul/SBX_BiasMatrix_latest.json",
+    "meta": "/content/drive/MyDrive/SBX/results_kul/SBX_Insights_enriched_meta_latest.csv",
+    "macro_summary": "/content/drive/MyDrive/SBX/results_kul/SBX_MacroSummary_latest.csv",
+    "master_feed": "/content/drive/MyDrive/SBX/results_kul/SBX_Master_Feed_latest.csv"
+  },
+  "counts": {
+    "kul": 8,
+    "mati": 0
+  },
+  "notes": "Auto-packed by 10g driver."
 }
